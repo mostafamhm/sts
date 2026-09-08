@@ -1,0 +1,11 @@
+CH_HOST =  '172.20.70.191'
+CH_PORT =8123
+CH_USER ='labafi'
+CH_PASS='l@b@fi@1234'
+
+
+PG_HOST = '172.20.70.191'
+PG_PORT = 5432
+PG_USER = 'labafi'
+PG_PASS = 'l@b@fi@1234'
+PG_DB = 'olap'
