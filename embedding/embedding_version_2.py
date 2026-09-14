@@ -213,91 +213,190 @@ def update_embedding(client, platform, row_key, vector):
 
 
 
-def run_stream_worker(platform):
+# def run_stream_worker(platform):
+#     client = get_client()
+#     logger.info(f"🚀 Re-embed Worker Started for platform='{platform}'")
+#     total_processed = 0
+
+#     while not stop_requested:
+#         cycle_start = time.time()
+#         try:
+#             df = fetch_pending(client, platform, MAX_FETCH_SIZE)
+
+#             if df.empty:
+#                 logger.info(f"💤 No new data. Sleeping {IDLE_WAIT_TIME}s...")
+#                 time.sleep(IDLE_WAIT_TIME)
+#                 continue
+
+#             parsed_rows = parse_row_keys(platform, df[COL_ROWKEY].tolist())
+#             if not parsed_rows:
+#                 continue
+
+#             # ۱. واکشی متن اصلی از جدول مرجع پلتفرم
+#             text_map = fetch_reference_texts(client, platform, parsed_rows)
+
+#             valid_texts, valid_keys = [], []
+#             zero_vector_keys = []
+
+#             for r in parsed_rows:
+#                 row_key = r["row_key"]
+#                 raw_txt = text_map.get(row_key)
+
+#                 if raw_txt is None or str(raw_txt).lower() in ['na', 'nan'] or not isinstance(raw_txt, str):
+#                     zero_vector_keys.append(row_key)
+#                     continue
+
+#                 txt = dynamic_preprocess(raw_txt, cleaner_opts)
+#                 if not txt or len(txt.strip()) < 2:
+#                     zero_vector_keys.append(row_key)
+#                 else:
+#                     valid_texts.append(txt)
+#                     valid_keys.append(row_key)
+
+#             for row_key in zero_vector_keys:
+#                 update_embedding(client, platform, row_key, ZERO_VECTOR)
+#             for i in range(0, len(valid_texts), GPU_BATCH_SIZE):
+#                 if stop_requested:
+#                     break
+#                 sub_texts = valid_texts[i:i + GPU_BATCH_SIZE]
+#                 sub_keys = valid_keys[i:i + GPU_BATCH_SIZE]
+#                 try:
+#                     embs = similarity_model.encode_texts(sub_texts)
+#                     if hasattr(embs, 'cpu'):
+#                         embs = embs.cpu().numpy()
+#                     for rk, emb in zip(sub_keys, embs):
+#                         update_embedding(client, platform, rk, emb.tolist())
+#                 except Exception as e:
+#                     logger.error(f"❌ GPU Error in batch: {e}")
+#                     for rk in sub_keys:
+#                         update_embedding(client, platform, rk, ZERO_VECTOR)
+
+#             total_processed += len(parsed_rows)
+#             duration = time.time() - cycle_start
+#             logger.info(
+#                 f"✨ Cycle done: {len(parsed_rows)} rows | Total: {total_processed} | "
+#                 f"Speed: {len(parsed_rows)/duration:.1f} r/s"
+#             )
+
+#             del df, parsed_rows, text_map
+#             gc.collect()
+
+#         except Exception as e:
+#             logger.error(f"💥 Critical Stream Error: {e}")
+#             time.sleep(ERROR_BACKOFF_TIME)
+#             try:
+#                 client = get_client()
+#             except Exception:
+#                 pass
+
+#     logger.info("🏁 Re-embed Worker stopped.")
+
+
+# if __name__ == "__main__":
+#     parser = argparse.ArgumentParser(description="Re-embed messages with the new (v2) model per platform.")
+#     parser.add_argument(
+#         "platform",
+#         choices=list(PLATFORM_CONFIG.keys()),
+#         help="پلتفرم مورد پردازش: x | telegram | bale | eita",
+#     )
+#     args = parser.parse_args()
+#     run_stream_worker(args.platform)
+
+
+
+def run_stream_worker():
     client = get_client()
-    logger.info(f"🚀 Re-embed Worker Started for platform='{platform}'")
-    total_processed = 0
+    logger.info("🚀 Re-embed Worker Started for all platforms")
+    platforms = list(PLATFORM_CONFIG.keys())
 
     while not stop_requested:
-        cycle_start = time.time()
-        try:
-            df = fetch_pending(client, platform, MAX_FETCH_SIZE)
+        data_found_in_any_platform = False
 
-            if df.empty:
-                logger.info(f"💤 No new data. Sleeping {IDLE_WAIT_TIME}s...")
-                time.sleep(IDLE_WAIT_TIME)
-                continue
+        for platform in platforms:
+            if stop_requested:
+                break
 
-            parsed_rows = parse_row_keys(platform, df[COL_ROWKEY].tolist())
-            if not parsed_rows:
-                continue
-
-            # ۱. واکشی متن اصلی از جدول مرجع پلتفرم
-            text_map = fetch_reference_texts(client, platform, parsed_rows)
-
-            valid_texts, valid_keys = [], []
-            zero_vector_keys = []
-
-            for r in parsed_rows:
-                row_key = r["row_key"]
-                raw_txt = text_map.get(row_key)
-
-                if raw_txt is None or str(raw_txt).lower() in ['na', 'nan'] or not isinstance(raw_txt, str):
-                    zero_vector_keys.append(row_key)
-                    continue
-
-                txt = dynamic_preprocess(raw_txt, cleaner_opts)
-                if not txt or len(txt.strip()) < 2:
-                    zero_vector_keys.append(row_key)
-                else:
-                    valid_texts.append(txt)
-                    valid_keys.append(row_key)
-
-            for row_key in zero_vector_keys:
-                update_embedding(client, platform, row_key, ZERO_VECTOR)
-            for i in range(0, len(valid_texts), GPU_BATCH_SIZE):
-                if stop_requested:
-                    break
-                sub_texts = valid_texts[i:i + GPU_BATCH_SIZE]
-                sub_keys = valid_keys[i:i + GPU_BATCH_SIZE]
+            logger.info(f"Checking platform: {platform}")
+            platform_processed = 0
+            while not stop_requested:
+                cycle_start = time.time()
                 try:
-                    embs = similarity_model.encode_texts(sub_texts)
-                    if hasattr(embs, 'cpu'):
-                        embs = embs.cpu().numpy()
-                    for rk, emb in zip(sub_keys, embs):
-                        update_embedding(client, platform, rk, emb.tolist())
+                    df = fetch_pending(client, platform, MAX_FETCH_SIZE)
+
+                    if df.empty:
+                        logger.info(f"💤 No new data for {platform}. Moving to next platform...")
+                        break 
+
+                    data_found_in_any_platform = True
+                    parsed_rows = parse_row_keys(platform, df[COL_ROWKEY].tolist())
+                    if not parsed_rows:
+                        continue
+
+                    text_map = fetch_reference_texts(client, platform, parsed_rows)
+
+                    valid_texts, valid_keys = [], []
+                    zero_vector_keys = []
+
+                    for r in parsed_rows:
+                        row_key = r["row_key"]
+                        raw_txt = text_map.get(row_key)
+
+                        if raw_txt is None or str(raw_txt).lower() in ['na', 'nan'] or not isinstance(raw_txt, str):
+                            zero_vector_keys.append(row_key)
+                            continue
+
+                        txt = dynamic_preprocess(raw_txt, cleaner_opts)
+                        if not txt or len(txt.strip()) < 2:
+                            zero_vector_keys.append(row_key)
+                        else:
+                            valid_texts.append(txt)
+                            valid_keys.append(row_key)
+
+                    for row_key in zero_vector_keys:
+                        update_embedding(client, platform, row_key, ZERO_VECTOR)
+                    
+                    for i in range(0, len(valid_texts), GPU_BATCH_SIZE):
+                        if stop_requested:
+                            break
+                        sub_texts = valid_texts[i:i + GPU_BATCH_SIZE]
+                        sub_keys = valid_keys[i:i + GPU_BATCH_SIZE]
+                        try:
+                            embs = similarity_model.encode_texts(sub_texts)
+                            if hasattr(embs, 'cpu'):
+                                embs = embs.cpu().numpy()
+                            for rk, emb in zip(sub_keys, embs):
+                                update_embedding(client, platform, rk, emb.tolist())
+                        except Exception as e:
+                            logger.error(f"GPU Error in batch: {e}")
+                            for rk in sub_keys:
+                                update_embedding(client, platform, rk, ZERO_VECTOR)
+
+                    platform_processed += len(parsed_rows)
+                    duration = time.time() - cycle_start
+                    logger.info(
+                        f"Cycle done for {platform}: {len(parsed_rows)} rows | Platform Total: {platform_processed} | "
+                        f"Speed: {len(parsed_rows)/duration:.1f} r/s"
+                    )
+
+                    del df, parsed_rows, text_map
+                    gc.collect()
+
                 except Exception as e:
-                    logger.error(f"❌ GPU Error in batch: {e}")
-                    for rk in sub_keys:
-                        update_embedding(client, platform, rk, ZERO_VECTOR)
+                    logger.error(f"Critical Stream Error for {platform}: {e}")
+                    time.sleep(ERROR_BACKOFF_TIME)
+                    try:
+                        client = get_client()
+                    except Exception:
+                        pass
+                    break # در صورت بروز خطای دیتابیس، از این پلتفرم خارج شده و بعدی را تست می‌کند
 
-            total_processed += len(parsed_rows)
-            duration = time.time() - cycle_start
-            logger.info(
-                f"✨ Cycle done: {len(parsed_rows)} rows | Total: {total_processed} | "
-                f"Speed: {len(parsed_rows)/duration:.1f} r/s"
-            )
-
-            del df, parsed_rows, text_map
-            gc.collect()
-
-        except Exception as e:
-            logger.error(f"💥 Critical Stream Error: {e}")
-            time.sleep(ERROR_BACKOFF_TIME)
-            try:
-                client = get_client()
-            except Exception:
-                pass
+  
+        if not data_found_in_any_platform and not stop_requested:
+            logger.info(f"💤 No data in ANY platform. Sleeping {IDLE_WAIT_TIME}s before next global check...")
+            time.sleep(IDLE_WAIT_TIME)
 
     logger.info("🏁 Re-embed Worker stopped.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Re-embed messages with the new (v2) model per platform.")
-    parser.add_argument(
-        "platform",
-        choices=list(PLATFORM_CONFIG.keys()),
-        help="پلتفرم مورد پردازش: x | telegram | bale | eita",
-    )
-    args = parser.parse_args()
-    run_stream_worker(args.platform)
+    run_stream_worker()
