@@ -298,25 +298,6 @@ The job sleeps 1 s between busy cycles and 15 s when there is nothing to do. Sto
 | `topic_keywords` | `topic_id`, `keyword` |
 | `similarity_results` | `query_message_id`, `similar_message_id`, `query_message`, `similar_message`, `topic_id`, `score` — requires a unique constraint on `(query_message_id, similar_message_id)` |
 
-## Operational Notes
 
-- **Idempotent by design.** The embedding worker only touches rows without an embedding; the STS job only inserts new pairs and marks messages processed after a successful save.
-- **Moderate write volume.** The worker updates rows with synchronous ClickHouse mutations (`mutations_sync=1`). Keep `MAX_FETCH_SIZE` moderate to avoid overloading the server.
-- **Model versioning.** Vectors are tagged with `embedding_2_version` (`bge3_finetuned`), which makes it easy to tell which model produced which embedding and to migrate again later.
-- **Model hot-reload.** `SimilarityModel.reload_model()` re-reads `config.yaml` and swaps the model in place if the path has changed, freeing GPU memory from the old one.
-
-## Troubleshooting
-
-| Symptom | Fix |
-|---|---|
-| `/bin/bash^M: bad interpreter` when running `run_sts.sh` | The script has Windows (CRLF) line endings. Convert it: `sed -i 's/\r$//' run_sts.sh` (or `dos2unix run_sts.sh`). |
-| `.venv/bin/activate: No such file or directory` | Create the virtual environment inside `STS job/` as shown in [Installation](#installation). |
-| Environment variables are ignored | The file must be named **`.env`** (not `env`) and sit next to the script. |
-| `Similarity model is not available` / model fails to load | Check that `models/bge_finetuned/` exists and that you launched the worker from inside `embedding/`. |
-| The worker keeps sleeping with "No data in ANY platform" | Nothing is pending — every row already has `embedding_2`. |
-
-## Security
-
-- **Never commit credentials.** Keep `.env` out of version control (add it to `.gitignore`) and share only a placeholder template.
 - Prefer environment variables or a secrets manager over hard-coded defaults in source code.
 - If credentials have ever been committed, rotate them and purge them from the Git history.
